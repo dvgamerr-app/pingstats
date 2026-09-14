@@ -46,7 +46,7 @@ namespace utility // export
 
 	using FileHandle = std::unique_ptr<std::FILE, FcloseType>;
 
-	namespace filesystem = std::experimental::filesystem;
+	namespace filesystem = std::filesystem;
 
 	template <typename Buffer>
 	Buffer readFileAs(filesystem::path filePath)
