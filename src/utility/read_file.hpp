@@ -58,7 +58,9 @@ namespace utility // export
 
 		if (!ec && size % sizeof(decltype(buffer[0])) == 0)
 		{
-			FileHandle file(std::fopen(filePath.u8string().c_str(), "rb"));
+			const auto u8path = filePath.u8string();
+			FileHandle file(std::fopen(
+				reinterpret_cast<const char*>(u8path.c_str()), "rb"));
 
 			if (file != nullptr)
 			{
