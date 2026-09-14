@@ -1,0 +1,44 @@
+name: Build Windows release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup MSBuild
+        uses: microsoft/setup-msbuild@v2
+
+      - name: Integrate vcpkg (manifest mode restores sqlite3 on build)
+        run: & "$env:VCPKG_INSTALLATION_ROOT\vcpkg.exe" integrate install
+
+      - name: Build (x64 Release)
+        run: >
+          msbuild build\vs2017\pingstats.sln
+          /m
+          /p:Configuration=Release
+          /p:Platform=x64
+          /p:PlatformToolset=v143
+          /p:WindowsTargetPlatformVersion=
+
+      - name: Upload build artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: pingstats-windows-x64
+          path: bin/pingstats.exe
+
+      - name: Attach exe to GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: bin/pingstats.exe
+          generate_release_notes: true

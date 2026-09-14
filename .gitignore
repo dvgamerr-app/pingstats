@@ -8,9 +8,13 @@
 /bin/
 *.suo
 *.db
+*.db-wal
+*.db-shm
+*.db-journal
 *.ipch
 *.obj
 *.log
 *.pdb
 *.filters
 *.user
+/build/vs2017/vcpkg_installed/

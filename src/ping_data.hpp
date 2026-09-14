@@ -25,6 +25,7 @@
 
 #include "utility/utility.hpp"
 #include "ping_monitor.hpp"
+#include "sqlite_log.hpp"
 
 #include <string>
 #include <vector>
@@ -46,6 +47,9 @@ namespace pingstats // export
 
 		std::string _lastResponder;
 
+		SqliteLog& _sqliteLog;
+		std::string _sectionName;
+
 		double _meanWeight{ 80.0 };
 		double _jitterWeight{ 40.0 };
 		double _lossWeight{ 40.0 };
@@ -62,7 +66,9 @@ namespace pingstats // export
 		double _gridSizeY{ 50.0 };
 
 	public:
-		PingData(ut::TreeConfigNode& config)
+		PingData(ut::TreeConfigNode& config, SqliteLog& sqliteLog)
+			: _sqliteLog{ sqliteLog }
+			, _sectionName{ config.name() }
 		{
 			auto& statscfg{ *config.findOrAppendNode("stats") };
 
@@ -144,6 +150,8 @@ namespace pingstats // export
 			const auto& result{ *_pingResults.insert(insertionPoint, echoResult) };
 			const auto isLost{ result.errorCode != 0 || result.statusCode != 0 };
 			const auto lw{ std::max(1.0 / _lossWeight, 1.0 / _pingResults.size()) };
+
+			_sqliteLog.log(_sectionName, result);
 
 			_loss = _loss * (1.0 - lw) + isLost * lw;
 			_lossPercentage = 100.0 * _loss;
