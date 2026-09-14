@@ -313,7 +313,7 @@ namespace pingstats // export
 		} };
 
 		const auto drawEndpoint{ [=](
-			MemoryCanvas& canvas,
+			wa::MemoryCanvas& canvas,
 			pxindex x,
 			double ry,
 			double xgap,
