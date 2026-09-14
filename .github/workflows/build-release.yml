@@ -20,7 +20,7 @@ jobs:
         uses: microsoft/setup-msbuild@v2
 
       - name: Integrate vcpkg (manifest mode restores sqlite3 on build)
-        run: & "$env:VCPKG_INSTALLATION_ROOT\vcpkg.exe" integrate install
+        run: '& "$env:VCPKG_INSTALLATION_ROOT\vcpkg.exe" integrate install'
 
       - name: Build (x64 Release)
         run: >
