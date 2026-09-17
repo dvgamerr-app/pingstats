@@ -1,4 +1,5 @@
 # pingstats
+
 Easy ping, jitter and loss monitoring tool for Windows.
 
 ![Screenshot](/screenshots/screen0.png?raw=true)
@@ -8,7 +9,7 @@ Easy ping, jitter and loss monitoring tool for Windows.
 `pingstats.cfg` is written on every start, so the keys below show up with
 their defaults after the first run.
 
-```
+```text
 db {
 	enabled = false;
 	path = pingstats.db;
