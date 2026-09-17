@@ -15,10 +15,14 @@ exclude_patterns = [
 name = "default"
 default = true
 
-# qlty has no C++ linter, so what it checks here is everything around the
-# code: the workflows, the README, and credentials that would otherwise be
-# committed by accident - pingstats.cfg holds a PostgreSQL URI, password
-# and all.
+# semgrep is the one linter in qlty's default source that understands C and
+# C++ (https://docs.qlty.sh/languages/c-cpp), so it is what actually reads
+# src/. The rest cover everything around the code: the workflows, the
+# README, and credentials that would otherwise be committed by accident -
+# a pingstats.cfg holds a PostgreSQL URI, password and all.
+
+[[plugin]]
+name = "semgrep"
 
 [[plugin]]
 name = "actionlint"
@@ -28,9 +32,3 @@ name = "markdownlint"
 
 [[plugin]]
 name = "gitleaks"
-
-# The README documents the shape of a libpq URI. The "password" in it is a
-# placeholder in a code fence, not a credential.
-[[exclude]]
-plugins = ["gitleaks"]
-file_patterns = ["README.md"]
