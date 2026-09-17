@@ -384,8 +384,25 @@ namespace pingstats // export
 				auto selectionDistance{ cr::nanoseconds::max() };
 				auto _lastPingMs{ getFirstSuccessfulPingMs(startIndex) };
 
+				// Results restored from the log can be separated by the
+				// time pingstats wasn't running. Anything longer than a few
+				// ping intervals is such a gap, and the plot is broken there
+				// instead of drawing a straight line across it.
+				const auto maxStep{ std::max<cr::nanoseconds>(
+					2s, 4 * pingData.pingInterval()) };
+
 				for (auto i{ startIndex }; i < pingResults.size(); ++i)
 				{
+					if (i > startIndex && pingResults[i].sentTime -
+						pingResults[i - 1].sentTime > maxStep)
+					{
+						drawPrettyLines(canvas, rect, _plotThickness,
+							_pointBuffer.data(), _pointBuffer.size());
+
+						_pointBuffer.clear();
+						_lastPingMs = getFirstSuccessfulPingMs(i);
+					}
+
 					const auto x{ calcX(pingResults[i].sentTime) };
 					auto color{ _lossColor };
 

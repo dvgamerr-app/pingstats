@@ -36,6 +36,7 @@
 #include "ping_monitor.hpp"
 #include "ping_data.hpp"
 #include "ping_plotter.hpp"
+#include "postgres_log.hpp"
 #include "sqlite_log.hpp"
 
 #include <array>
@@ -73,8 +74,8 @@ namespace pingstats // export
 		Section(Section&&) = delete;
 
 		Section(ut::TreeConfigNode& config, SqliteLog& sqliteLog,
-			HWND resultHandler, WPARAM resultTag)
-			: data{ config, sqliteLog }
+			PostgresLog& postgresLog, HWND resultHandler, WPARAM resultTag)
+			: data{ config, sqliteLog, postgresLog }
 			, plotter{ config }
 			, monitor{ config, resultHandler, resultTag }
 		{}
@@ -91,9 +92,10 @@ namespace pingstats // export
 		wa::DeviceContext _deviceContext;
 		wa::MemoryCanvas _backBuffer;
 
-		// Declared before _sections: sections hold a reference to it, so it
-		// must outlive them (constructed first, destroyed last).
+		// Declared before _sections: sections hold references to these, so
+		// they must outlive them (constructed first, destroyed last).
 		std::unique_ptr<SqliteLog> _sqliteLog;
+		std::unique_ptr<PostgresLog> _postgresLog;
 
 		std::vector<std::unique_ptr<Section>> _sections;
 
@@ -144,6 +146,7 @@ namespace pingstats // export
 			config.loadOrStore("clearColor", _clearColor);
 
 			_sqliteLog = std::make_unique<SqliteLog>(config);
+			_postgresLog = std::make_unique<PostgresLog>(config);
 
 			auto& hosts{ *config.findOrAppendNode("hosts") };
 
@@ -165,7 +168,8 @@ namespace pingstats // export
 					if (strpos == "auto")
 					{
 						_sections.push_back(std::make_unique<Section>(
-							*host, *_sqliteLog, _windowHandle, _sections.size()));
+							*host, *_sqliteLog, *_postgresLog,
+							_windowHandle, _sections.size()));
 					}
 					else
 					{
@@ -177,7 +181,7 @@ namespace pingstats // export
 						}
 
 						_sections[i] = std::make_unique<Section>(
-							*host, *_sqliteLog, _windowHandle, i);
+							*host, *_sqliteLog, *_postgresLog, _windowHandle, i);
 					}
 				}
 			}

@@ -2,6 +2,7 @@
   "name": "pingstats",
   "version-string": "2.0.4",
   "dependencies": [
+    "libpq",
     "sqlite3"
   ]
 }

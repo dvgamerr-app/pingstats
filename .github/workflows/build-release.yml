@@ -19,7 +19,7 @@ jobs:
       - name: Setup MSBuild
         uses: microsoft/setup-msbuild@v2
 
-      - name: Integrate vcpkg (manifest mode restores sqlite3 on build)
+      - name: Integrate vcpkg (manifest mode restores sqlite3 and libpq on build)
         run: '& "$env:VCPKG_INSTALLATION_ROOT\vcpkg.exe" integrate install'
 
       - name: Build (x64 Release)
@@ -41,8 +41,9 @@ jobs:
       - name: Package release zip
         shell: pwsh
         run: |
-          # bin\ also holds sqlite3.dll, copied there automatically by
-          # vcpkg's AppLocal deployment step during the build.
+          # bin\ also holds sqlite3.dll, libpq.dll and everything libpq
+          # pulls in, copied there automatically by vcpkg's AppLocal
+          # deployment step during the build.
           Compress-Archive -Path bin\* -DestinationPath pingstats-windows-x64.zip -Force
 
       - name: Upload build artifact

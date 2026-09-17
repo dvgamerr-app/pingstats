@@ -25,6 +25,7 @@
 
 #include "utility/utility.hpp"
 #include "ping_monitor.hpp"
+#include "postgres_log.hpp"
 #include "sqlite_log.hpp"
 
 #include <string>
@@ -44,10 +45,12 @@ namespace pingstats // export
 		const IcmpEchoResult* _lastResult{};
 
 		std::size_t _historySize = { 2 * 3600 };
+		std::uint32_t _pingIntervalMs{ 500 };
 
 		std::string _lastResponder;
 
 		SqliteLog& _sqliteLog;
+		PostgresLog& _postgresLog;
 		std::string _sectionName;
 
 		double _meanWeight{ 80.0 };
@@ -66,16 +69,30 @@ namespace pingstats // export
 		double _gridSizeY{ 50.0 };
 
 	public:
-		PingData(ut::TreeConfigNode& config, SqliteLog& sqliteLog)
+		PingData(ut::TreeConfigNode& config,
+			SqliteLog& sqliteLog, PostgresLog& postgresLog)
 			: _sqliteLog{ sqliteLog }
+			, _postgresLog{ postgresLog }
 			, _sectionName{ config.name() }
 		{
+			// Same key and default as PingMonitor, which owns the actual
+			// timing. Here it only tells a gap in the history apart from
+			// the normal step between two results.
+			config.loadOrStore("pingIntervalMs", _pingIntervalMs);
+
 			auto& statscfg{ *config.findOrAppendNode("stats") };
 
 			statscfg.loadOrStore("historySize", _historySize);
 			statscfg.loadOrStore("averagePingWeight", _meanWeight);
 			statscfg.loadOrStore("averageJitterWeight", _jitterWeight);
 			statscfg.loadOrStore("averageLossWeight", _lossWeight);
+
+			// Replay what this section already measured before the last
+			// shutdown, so the graph comes back instead of starting empty.
+			for (const auto& result : _sqliteLog.loadRecent(_sectionName, _historySize))
+			{
+				appendPingResult(result, false);
+			}
 		}
 
 		auto lastResult() const
@@ -133,43 +150,14 @@ namespace pingstats // export
 			return _pingOffsetMs;
 		}
 
+		auto pingInterval() const
+		{
+			return cr::milliseconds{ _pingIntervalMs };
+		}
+
 		void insertPingResult(const IcmpEchoResult& echoResult)
 		{
-			_lastResponder = echoResult.responder.name();
-
-			// Usually near the end.
-			auto insertionPoint{ std::upper_bound(
-				_pingResults.begin(),
-				_pingResults.end(),
-				echoResult,
-				[](const auto& lhs, const auto& rhs) {
-					return lhs.sentTime < rhs.sentTime;
-				}
-			) };
-
-			const auto& result{ *_pingResults.insert(insertionPoint, echoResult) };
-			const auto isLost{ result.errorCode != 0 || result.statusCode != 0 };
-			const auto lw{ std::max(1.0 / _lossWeight, 1.0 / _pingResults.size()) };
-
-			_sqliteLog.log(_sectionName, result);
-
-			_loss = _loss * (1.0 - lw) + isLost * lw;
-			_lossPercentage = 100.0 * _loss;
-
-			if (!isLost)
-			{
-				calculateStats(result);
-			}
-
-			if (_pingResults.size() >= _historySize * 2)
-			{
-				std::copy(_pingResults.end() - _historySize, 
-					_pingResults.end(), _pingResults.begin());
-
-				_pingResults.resize(_historySize);
-			}
-
-			_lastResult = &_pingResults.back();
+			appendPingResult(echoResult, true);
 		}
 
 		void insertTraceResult(const IcmpEchoResult& traceResult)
@@ -190,6 +178,52 @@ namespace pingstats // export
 		}
 
 	private:
+		// `persist` is false while replaying the results the log already
+		// holds: stats and the plot are rebuilt from them, but they are
+		// not written back out.
+		void appendPingResult(const IcmpEchoResult& echoResult, bool persist)
+		{
+			_lastResponder = echoResult.responder.name();
+
+			// Usually near the end.
+			auto insertionPoint{ std::upper_bound(
+				_pingResults.begin(),
+				_pingResults.end(),
+				echoResult,
+				[](const auto& lhs, const auto& rhs) {
+					return lhs.sentTime < rhs.sentTime;
+				}
+			) };
+
+			const auto& result{ *_pingResults.insert(insertionPoint, echoResult) };
+			const auto isLost{ result.errorCode != 0 || result.statusCode != 0 };
+			const auto lw{ std::max(1.0 / _lossWeight, 1.0 / _pingResults.size()) };
+
+			if (persist)
+			{
+				_sqliteLog.log(_sectionName, result);
+				_postgresLog.log(_sectionName, result);
+			}
+
+			_loss = _loss * (1.0 - lw) + isLost * lw;
+			_lossPercentage = 100.0 * _loss;
+
+			if (!isLost)
+			{
+				calculateStats(result);
+			}
+
+			if (_pingResults.size() >= _historySize * 2)
+			{
+				std::copy(_pingResults.end() - _historySize, 
+					_pingResults.end(), _pingResults.begin());
+
+				_pingResults.resize(_historySize);
+			}
+
+			_lastResult = &_pingResults.back();
+		}
+
 		void calculateStats(const IcmpEchoResult& result)
 		{
 			_lastPing = ut::milliseconds_f64(result.latency).count();
