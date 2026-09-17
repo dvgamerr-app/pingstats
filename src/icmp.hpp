@@ -148,6 +148,20 @@ namespace pingstats // export
 				"Unable to resolve hostname \""s + targetname + 
 				"\".\r\nCode: " + std::to_string(ec));
 		}
+
+		// Parses a dotted-quad address without ever touching DNS, for
+		// rehydrating responders that were stored in a log.
+		static IpEndPoint fromAddressString(const char* text)
+		{
+			IPAddr addr{ INADDR_ANY };
+
+			if (text != nullptr)
+			{
+				inet_pton(AF_INET, text, &addr);
+			}
+
+			return IpEndPoint{ addr };
+		}
 	};
 
 	class IcmpEchoResult
@@ -160,6 +174,19 @@ namespace pingstats // export
 		IpEndPoint responder;
 		std::uint32_t sysLatency;
 	};
+
+	// Results carry steady_clock stamps, which have no relation to the wall
+	// clock, so converting one means reading both clocks at the same moment
+	// and taking the difference.
+	std::int64_t toUnixTimeMs(cr::steady_clock::time_point tp)
+	{
+		const auto sysNow{ cr::system_clock::now() };
+		const auto offset{ cr::duration_cast<cr::milliseconds>(
+			tp - cr::steady_clock::now()) };
+
+		return cr::duration_cast<cr::milliseconds>(
+			sysNow.time_since_epoch()).count() + offset.count();
+	}
 
 	class IcmpEchoContext
 	{

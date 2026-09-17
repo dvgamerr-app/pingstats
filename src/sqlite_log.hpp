@@ -56,7 +56,8 @@ namespace pingstats // export
 	{
 		bool _enabled{ false };
 		std::string _path{ "pingstats.db" };
-		int _retentionDays{ 30 };
+		int _retentionDays{ 7 };
+		int _restoreMinutes{ 60 };
 
 		sqlite3* _db{};
 		sqlite3_stmt* _insertStmt{};
@@ -83,7 +84,8 @@ namespace pingstats // export
 		// db {
 		//     enabled = false;
 		//     path = pingstats.db;
-		//     retentionDays = 30;
+		//     retentionDays = 7;
+		//     restoreMinutes = 60;
 		// }
 		SqliteLog(ut::TreeConfigNode& config)
 		{
@@ -92,6 +94,7 @@ namespace pingstats // export
 			dbcfg.loadOrStore("enabled", _enabled);
 			dbcfg.loadOrStore("path", _path);
 			dbcfg.loadOrStore("retentionDays", _retentionDays);
+			dbcfg.loadOrStore("restoreMinutes", _restoreMinutes);
 
 			if (!_enabled)
 			{
@@ -130,7 +133,8 @@ namespace pingstats // export
 				return;
 			}
 
-			const auto stamp{ toUnixTime(result.sentTime) };
+			const auto stampMs{ toUnixTimeMs(result.sentTime) };
+			const auto stamp{ static_cast<std::time_t>(stampMs / 1000) };
 
 			std::tm tm;
 			localtime_s(&tm, &stamp);
@@ -142,7 +146,7 @@ namespace pingstats // export
 			sqlite3_reset(_insertStmt);
 			sqlite3_clear_bindings(_insertStmt);
 
-			sqlite3_bind_int64(_insertStmt, 1, static_cast<sqlite3_int64>(stamp) * 1000);
+			sqlite3_bind_int64(_insertStmt, 1, static_cast<sqlite3_int64>(stampMs));
 			sqlite3_bind_text(_insertStmt, 2, section.c_str(), -1, SQLITE_TRANSIENT);
 
 			if (isLost)
@@ -168,15 +172,94 @@ namespace pingstats // export
 			}
 		}
 
-	private:
-		static std::time_t toUnixTime(cr::steady_clock::time_point tp)
+		// Reads a section's recent history back out of the log, so a
+		// restarted pingstats redraws the graph it had before instead of
+		// starting from an empty plot. Rows come back oldest first, capped
+		// at maxRows, and never older than the configured restore window -
+		// after a long shutdown that window is simply empty.
+		std::vector<IcmpEchoResult> loadRecent(
+			const std::string& section, std::size_t maxRows)
 		{
-			const auto dur{ cr::duration_cast<cr::system_clock::duration>(
-				tp - cr::steady_clock::now()) };
+			std::vector<IcmpEchoResult> results;
 
-			return cr::system_clock::to_time_t(cr::system_clock::now() + dur);
+			if (!_enabled || _restoreMinutes <= 0 || maxRows == 0)
+			{
+				return results;
+			}
+
+			const auto anchor{ cr::steady_clock::now() };
+			const auto nowMs{ toUnixTimeMs(anchor) };
+			const auto cutoffMs{ nowMs - std::int64_t{ _restoreMinutes } * 60 * 1000 };
+
+			const auto tables{ partitionTablesSince(cutoffMs) };
+
+			if (tables.empty())
+			{
+				return results;
+			}
+
+			// One numbered-parameter set shared by every partition branch.
+			std::string sql;
+
+			for (auto& table : tables)
+			{
+				if (!sql.empty())
+				{
+					sql += " UNION ALL ";
+				}
+
+				sql += "SELECT ts, latency_ms, error_code, status_code, responder, "
+					"sys_latency_ms FROM \"" + table + "\" "
+					"WHERE section = ?1 AND ts >= ?2";
+			}
+
+			sql += " ORDER BY ts DESC LIMIT ?3;";
+
+			sqlite3_stmt* stmt{};
+
+			if (sqlite3_prepare_v2(_db, sql.c_str(), -1, &stmt, nullptr) != SQLITE_OK)
+			{
+				return results;
+			}
+
+			sqlite3_bind_text(stmt, 1, section.c_str(), -1, SQLITE_TRANSIENT);
+			sqlite3_bind_int64(stmt, 2, cutoffMs);
+			sqlite3_bind_int64(stmt, 3, static_cast<sqlite3_int64>(maxRows));
+
+			while (sqlite3_step(stmt) == SQLITE_ROW)
+			{
+				IcmpEchoResult result{};
+
+				result.sentTime = anchor -
+					cr::milliseconds{ nowMs - sqlite3_column_int64(stmt, 0) };
+
+				if (sqlite3_column_type(stmt, 1) != SQLITE_NULL)
+				{
+					result.latency = cr::duration_cast<cr::nanoseconds>(
+						ut::milliseconds_f64{ sqlite3_column_double(stmt, 1) });
+				}
+
+				result.errorCode = static_cast<std::uint32_t>(
+					sqlite3_column_int(stmt, 2));
+				result.statusCode = static_cast<std::uint32_t>(
+					sqlite3_column_int(stmt, 3));
+				result.responder = IpEndPoint::fromAddressString(
+					reinterpret_cast<const char*>(sqlite3_column_text(stmt, 4)));
+				result.sysLatency = static_cast<std::uint32_t>(
+					sqlite3_column_int(stmt, 5));
+
+				results.push_back(result);
+			}
+
+			sqlite3_finalize(stmt);
+
+			// The query takes the newest rows, the plot wants them in order.
+			std::reverse(results.begin(), results.end());
+
+			return results;
 		}
 
+	private:
 		static std::string tableNameForDay(const std::tm& tm)
 		{
 			char buffer[32];
@@ -243,6 +326,55 @@ namespace pingstats // export
 			pruneOldPartitions();
 		}
 
+		// All partition tables, oldest first - the names sort by date.
+		std::vector<std::string> partitionTables()
+		{
+			std::vector<std::string> tables;
+
+			sqlite3_stmt* stmt{};
+
+			static constexpr auto SQL{
+				"SELECT name FROM sqlite_master WHERE type='table' ORDER BY name;" };
+
+			if (sqlite3_prepare_v2(_db, SQL, -1, &stmt, nullptr) != SQLITE_OK)
+			{
+				return tables;
+			}
+
+			while (sqlite3_step(stmt) == SQLITE_ROW)
+			{
+				const auto name{ reinterpret_cast<const char*>(
+					sqlite3_column_text(stmt, 0)) };
+
+				if (name != nullptr && isPartitionTableName(name))
+				{
+					tables.emplace_back(name);
+				}
+			}
+
+			sqlite3_finalize(stmt);
+
+			return tables;
+		}
+
+		std::vector<std::string> partitionTablesSince(std::int64_t unixTimeMs)
+		{
+			const auto stamp{ static_cast<std::time_t>(unixTimeMs / 1000) };
+
+			std::tm tm;
+			localtime_s(&tm, &stamp);
+
+			const auto firstTable{ tableNameForDay(tm) };
+
+			auto tables{ partitionTables() };
+
+			tables.erase(std::remove_if(tables.begin(), tables.end(),
+				[&](const std::string& name) { return name < firstTable; }),
+				tables.end());
+
+			return tables;
+		}
+
 		void pruneOldPartitions()
 		{
 			static constexpr auto SECONDS_PER_DAY{ 24 * 3600 };
@@ -254,35 +386,12 @@ namespace pingstats // export
 
 			const auto cutoffTable{ tableNameForDay(cutoffTm) };
 
-			sqlite3_stmt* stmt{};
-
-			static constexpr auto SQL{
-				"SELECT name FROM sqlite_master WHERE type='table';" };
-
-			if (sqlite3_prepare_v2(_db, SQL, -1, &stmt, nullptr) != SQLITE_OK)
+			for (auto& table : partitionTables())
 			{
-				return;
-			}
-
-			std::vector<std::string> tablesToDrop;
-
-			while (sqlite3_step(stmt) == SQLITE_ROW)
-			{
-				const auto name{ reinterpret_cast<const char*>(
-					sqlite3_column_text(stmt, 0)) };
-
-				if (name != nullptr && isPartitionTableName(name) &&
-					std::string(name) < cutoffTable)
+				if (table < cutoffTable)
 				{
-					tablesToDrop.emplace_back(name);
+					exec("DROP TABLE IF EXISTS \"" + table + "\";");
 				}
-			}
-
-			sqlite3_finalize(stmt);
-
-			for (auto& table : tablesToDrop)
-			{
-				exec("DROP TABLE IF EXISTS \"" + table + "\";");
 			}
 		}
 
