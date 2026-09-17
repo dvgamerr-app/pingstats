@@ -32,7 +32,7 @@ jobs:
           BASE_REF: ${{ github.base_ref }}
         run: |
           set +e
-          qlty check --no-fix --upstream "origin/${BASE_REF}" \
+          qlty check --no-fix --no-formatters --upstream "origin/${BASE_REF}" \
             2>&1 | sed -r 's/\x1b\[[0-9;]*[mGKH]//g' | tee qlty-check.txt
           code="${PIPESTATUS[0]}"
           echo "exit_code=${code}" >> "$GITHUB_OUTPUT"
