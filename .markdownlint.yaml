@@ -4,3 +4,8 @@ default: true
 # Line length: the README wraps where it reads well, including tables that
 # are wider than 80 columns.
 MD013: false
+
+# Hard tabs: flagged in prose, allowed inside code fences. The config and
+# source examples are tab indented because the files they show are.
+MD010:
+  code_blocks: false
