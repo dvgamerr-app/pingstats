@@ -16,7 +16,7 @@ db {
 	retentionDays = 7;
 	restoreMinutes = 60;
 	postgresUri = ;
-	postgresTable = pingstats;
+	postgresTable = stash.pingstats;
 	postgresSyncSeconds = 60;
 	postgresRetentionDays = 30;
 }
@@ -29,7 +29,7 @@ db {
 | `retentionDays` | whole days older than this are dropped from SQLite |
 | `restoreMinutes` | how much history is reloaded into the graph on start, `0` to disable |
 | `postgresUri` | libpq connection URI, empty for no PostgreSQL sync |
-| `postgresTable` | the single table results are synced into |
+| `postgresTable` | the single table results are synced into, `schema.table` or just `table` |
 | `postgresSyncSeconds` | how often queued results are sent |
 | `postgresRetentionDays` | how long PostgreSQL keeps results, `0` keeps everything |
 
@@ -52,10 +52,13 @@ retries while the server is unreachable. SQLite remains the local source of
 truth and the one the graphs are restored from.
 
 On connect, pingstats looks `postgresTable` up and creates it if it isn't
-there:
+there. The name may carry a schema, as the default `stash.pingstats` does,
+and the schema is created too when it is missing:
 
 ```sql
-CREATE TABLE pingstats (
+CREATE SCHEMA IF NOT EXISTS stash;
+
+CREATE TABLE stash.pingstats (
 	ts TIMESTAMPTZ NOT NULL,
 	host TEXT NOT NULL,
 	section TEXT NOT NULL,
@@ -67,14 +70,15 @@ CREATE TABLE pingstats (
 ```
 
 Everything lands in that one table. It is range partitioned by ISO week in
-UTC, and the weekly partition - `pingstats_2026w38` and so on - is created
-the first time a result of that week is inserted. Querying and inserting
-still go through the parent table, so the partitioning only shows up when you
-want it to: dropping a week is one `DROP TABLE`, which is what `postgresRetentionDays`
-does for you. Because a partition can only go once its newest result has aged
-out, results live at least `postgresRetentionDays` and at most a week longer
-than that. `0` keeps everything. Rows carry the machine's hostname, so several
-machines can share the table.
+UTC, and the weekly partition - `stash.pingstats_2026w38` and so on, always
+in the same schema as the parent - is created the first time a result of that
+week is inserted. Querying and inserting still go through the parent table,
+so the partitioning only shows up when you want it to: dropping a week is one
+`DROP TABLE`, which is what `postgresRetentionDays` does for you. Because a
+partition can only go once its newest result has aged out, results live at
+least `postgresRetentionDays` and at most a week longer than that. `0` keeps
+everything. Rows carry the machine's hostname, so several machines can share
+the table.
 
 The two retentions are deliberately separate: SQLite is the local buffer the
 graphs are restored from and keeps a week, while PostgreSQL is the archive and
