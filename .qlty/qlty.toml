@@ -1,0 +1,36 @@
+# Configuration for the Qlty CLI (https://qlty.sh), run by the pr-check
+# workflow against the files a pull request changes.
+#
+# Plugins are listed without a version so qlty resolves the one it knows is
+# good. Pin one with `version = "1.2.3"` if that ever needs to be fixed.
+config_version = "0"
+
+exclude_patterns = [
+    "bin/**",
+    "build/**",
+    "screenshots/**",
+]
+
+[[source]]
+name = "default"
+default = true
+
+# qlty has no C++ linter, so what it checks here is everything around the
+# code: the workflows, the README, and credentials that would otherwise be
+# committed by accident - pingstats.cfg holds a PostgreSQL URI, password
+# and all.
+
+[[plugin]]
+name = "actionlint"
+
+[[plugin]]
+name = "markdownlint"
+
+[[plugin]]
+name = "gitleaks"
+
+# The README documents the shape of a libpq URI. The "password" in it is a
+# placeholder in a code fence, not a credential.
+[[exclude]]
+plugins = ["gitleaks"]
+file_patterns = ["README.md"]

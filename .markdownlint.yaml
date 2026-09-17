@@ -1,0 +1,6 @@
+# Used by qlty's markdownlint plugin, see .qlty/qlty.toml.
+default: true
+
+# Line length: the README wraps where it reads well, including tables that
+# are wider than 80 columns.
+MD013: false
