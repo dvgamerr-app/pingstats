@@ -81,7 +81,7 @@ namespace pingstats // export
 		static constexpr std::int64_t MS_PER_DAY{ 24 * 3600 * 1000 };
 
 		std::string _uri;
-		std::string _table{ "pingstats" };
+		std::string _table{ "stash.pingstats" };
 		std::string _hostname{ computerName() };
 
 		std::uint32_t _syncSeconds{ 60 };
@@ -97,7 +97,16 @@ namespace pingstats // export
 		std::size_t _queueLimit{ 100000 };
 
 		PGconn* _connection{};
+
+		// Filled in per connection by prepareSchema(): the quoted schema
+		// ("stash", empty when postgresTable names no schema), the bare
+		// table name ("pingstats") that the index and the weekly
+		// partitions are named after, and the quoted, qualified name that
+		// statements actually use ("stash"."pingstats").
+		std::string _quotedSchema;
+		std::string _bareTable;
 		std::string _quotedTable;
+
 		bool _partitioned{};
 		std::int64_t _currentWeekStartMs{ -1 };
 		bool _reportedFailure{};
@@ -128,7 +137,7 @@ namespace pingstats // export
 		//
 		// db {
 		//     postgresUri = ;               // empty = no PostgreSQL sync
-		//     postgresTable = pingstats;
+		//     postgresTable = stash.pingstats;   // schema optional
 		//     postgresSyncSeconds = 60;
 		//     postgresRetentionDays = 30;
 		// }
@@ -349,20 +358,61 @@ namespace pingstats // export
 			return true;
 		}
 
-		// Runs once per connection: look the table up, and create it if it
-		// isn't there yet.
-		bool prepareSchema()
+		// postgresTable may name a schema, as in "stash.pingstats". The
+		// first dot separates the two halves, so an identifier that itself
+		// contains a dot cannot be used - nothing here ever needs one.
+		bool splitTableName()
 		{
-			const auto quoted{ quoteIdentifier(_table) };
+			const auto dot{ _table.find('.') };
 
-			if (!quoted.has_value())
+			auto schema{ dot == std::string::npos ?
+				std::string{} : _table.substr(0, dot) };
+
+			auto name{ dot == std::string::npos ?
+				_table : _table.substr(dot + 1) };
+
+			if (name.size() == 0 ||
+				(dot != std::string::npos && schema.size() == 0))
 			{
 				reportFailure("Invalid table name: "s + _table);
 
 				return false;
 			}
 
-			_quotedTable = *quoted;
+			const auto quotedName{ quoteIdentifier(name) };
+
+			const auto quotedSchema{ schema.size() == 0 ?
+				std::optional<std::string>{ "" } : quoteIdentifier(schema) };
+
+			if (!quotedName.has_value() || !quotedSchema.has_value())
+			{
+				reportFailure("Invalid table name: "s + _table);
+
+				return false;
+			}
+
+			_bareTable = std::move(name);
+			_quotedSchema = *quotedSchema;
+			_quotedTable = qualify(*quotedName);
+
+			return true;
+		}
+
+		// Puts a quoted name into the configured schema, if there is one.
+		std::string qualify(const std::string& quotedName) const
+		{
+			return _quotedSchema.size() == 0 ?
+				quotedName : _quotedSchema + "." + quotedName;
+		}
+
+		// Runs once per connection: look the table up, and create it if it
+		// isn't there yet.
+		bool prepareSchema()
+		{
+			if (!splitTableName())
+			{
+				return false;
+			}
 
 			std::string error;
 
@@ -433,7 +483,9 @@ namespace pingstats // export
 
 		bool createTable()
 		{
-			const auto index{ quoteIdentifier(_table + "_ts_idx") };
+			// CREATE INDEX takes a bare name and puts the index in the
+			// table's own schema, so this one is deliberately unqualified.
+			const auto index{ quoteIdentifier(_bareTable + "_ts_idx") };
 
 			if (!index.has_value())
 			{
@@ -443,6 +495,9 @@ namespace pingstats // export
 			// The weekly partitions themselves are created on demand, when
 			// the first result of a week is inserted.
 			const auto sql{
+				(_quotedSchema.size() == 0 ? "" :
+					"CREATE SCHEMA IF NOT EXISTS " + _quotedSchema + ";") +
+
 				"CREATE TABLE " + _quotedTable + " ("
 				"ts TIMESTAMPTZ NOT NULL,"
 				"host TEXT NOT NULL,"
@@ -518,7 +573,7 @@ namespace pingstats // export
 				return true;
 			}
 
-			const auto name{ quoteIdentifier(partitionName(_table, start)) };
+			const auto name{ quoteIdentifier(partitionName(_bareTable, start)) };
 
 			if (!name.has_value())
 			{
@@ -526,7 +581,7 @@ namespace pingstats // export
 			}
 
 			const auto sql{
-				"CREATE TABLE IF NOT EXISTS " + *name +
+				"CREATE TABLE IF NOT EXISTS " + qualify(*name) +
 				" PARTITION OF " + _quotedTable + " FOR VALUES FROM ('" +
 				timestampLiteral(start) + "') TO ('" +
 				timestampLiteral(start + 7 * MS_PER_DAY) + "');" };
@@ -576,7 +631,7 @@ namespace pingstats // export
 			}
 
 			const auto lastExpiredName{
-				partitionName(_table, weekStart(lastExpired)) };
+				partitionName(_bareTable, weekStart(lastExpired)) };
 
 			const char* params[]{ _quotedTable.c_str() };
 
@@ -633,13 +688,13 @@ namespace pingstats // export
 		{
 			const auto suffixSize{ std::string("_0000w00").size() };
 
-			if (name.size() != _table.size() + suffixSize ||
-				name.compare(0, _table.size(), _table) != 0)
+			if (name.size() != _bareTable.size() + suffixSize ||
+				name.compare(0, _bareTable.size(), _bareTable) != 0)
 			{
 				return false;
 			}
 
-			const auto suffix{ name.substr(_table.size()) };
+			const auto suffix{ name.substr(_bareTable.size()) };
 
 			if (suffix[0] != '_' || suffix[5] != 'w')
 			{
