@@ -1,0 +1,88 @@
+name: PR check
+
+# Pull requests only: tags and pushes to main are handled by build-release.
+on:
+  pull_request:
+    branches:
+      - main
+
+permissions:
+  contents: read
+  pull-requests: write
+
+jobs:
+  qlty:
+    name: qlty check
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          # qlty diffs the branch against its base, so it needs the history.
+          fetch-depth: 0
+
+      - name: Install qlty
+        uses: qltysh/qlty-action/install@v2
+
+      - name: Check the files this PR changes
+        id: check
+        env:
+          BASE_REF: ${{ github.base_ref }}
+        run: |
+          set +e
+          qlty check --no-fix --no-formatters --upstream "origin/${BASE_REF}" \
+            2>&1 | sed -r 's/\x1b\[[0-9;]*[mGKH]//g' | tee qlty-check.txt
+          code="${PIPESTATUS[0]}"
+          echo "exit_code=${code}" >> "$GITHUB_OUTPUT"
+
+      # Skipped on pull requests from forks, where the token is read only.
+      - name: Report the result on the PR
+        if: >-
+          always() &&
+          github.event.pull_request.head.repo.full_name == github.repository
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          PR: ${{ github.event.pull_request.number }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          EXIT_CODE: ${{ steps.check.outputs.exit_code }}
+        run: |
+          set -euo pipefail
+
+          marker="<!-- qlty-pr-check -->"
+
+          if [ "${EXIT_CODE:-1}" = "0" ]; then
+            status="✅ qlty check ผ่าน ไม่พบปัญหาในไฟล์ที่ PR นี้แก้"
+          else
+            status="❌ qlty check ไม่ผ่าน ดูรายละเอียดด้านล่าง"
+          fi
+
+          {
+            echo "${marker}"
+            echo "## ${status}"
+            echo
+            echo "<details><summary>ผลลัพธ์จาก qlty check</summary>"
+            echo
+            echo '```text'
+            head -c 30000 qlty-check.txt || true
+            echo '```'
+            echo
+            echo "</details>"
+            echo
+            echo "[ดู log ทั้งหมด](${RUN_URL})"
+          } > comment.md
+
+          id="$(gh api "repos/${REPO}/issues/${PR}/comments" --paginate \
+            --jq "map(select(.body | startswith(\"${marker}\"))) | .[0].id // empty" | head -n 1)"
+
+          if [ -n "${id}" ]; then
+            gh api -X PATCH "repos/${REPO}/issues/comments/${id}" -F body=@comment.md
+          else
+            gh api -X POST "repos/${REPO}/issues/${PR}/comments" -F body=@comment.md
+          fi
+
+      - name: Fail when qlty found issues
+        if: steps.check.outputs.exit_code != '0'
+        run: exit 1

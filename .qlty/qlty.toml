@@ -1,0 +1,34 @@
+# Configuration for the Qlty CLI (https://qlty.sh), run by the pr-check
+# workflow against the files a pull request changes.
+#
+# Plugins are listed without a version so qlty resolves the one it knows is
+# good. Pin one with `version = "1.2.3"` if that ever needs to be fixed.
+config_version = "0"
+
+exclude_patterns = [
+    "bin/**",
+    "build/**",
+    "screenshots/**",
+]
+
+[[source]]
+name = "default"
+default = true
+
+# semgrep is the one linter in qlty's default source that understands C and
+# C++ (https://docs.qlty.sh/languages/c-cpp), so it is what actually reads
+# src/. The rest cover everything around the code: the workflows, the
+# README, and credentials that would otherwise be committed by accident -
+# a pingstats.cfg holds a PostgreSQL URI, password and all.
+
+[[plugin]]
+name = "semgrep"
+
+[[plugin]]
+name = "actionlint"
+
+[[plugin]]
+name = "markdownlint"
+
+[[plugin]]
+name = "gitleaks"

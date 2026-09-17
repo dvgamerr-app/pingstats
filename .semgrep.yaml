@@ -1,0 +1,35 @@
+# Rules for the semgrep plugin, which is the linter qlty uses for C and C++
+# (https://docs.qlty.sh/languages/c-cpp). qlty runs semgrep as
+# `semgrep --config .semgrep.yaml`, so registry rulesets are not available
+# here and the rules below are the whole ruleset.
+#
+# They are deliberately few: functions that cannot be used safely at all,
+# rather than style. src/ is clean of all of them today.
+rules:
+  - id: pingstats-unbounded-string-copy
+    languages: [c, cpp]
+    severity: ERROR
+    message: >-
+      This copy has no bound and overflows the destination on unexpected
+      input. Use a counted version such as snprintf, or std::string.
+    pattern-either:
+      - pattern: strcpy(...)
+      - pattern: strcat(...)
+      - pattern: sprintf(...)
+      - pattern: vsprintf(...)
+
+  - id: pingstats-unbounded-stdin-read
+    languages: [c, cpp]
+    severity: ERROR
+    message: >-
+      gets() has no way to limit how much it reads. Use fgets() or
+      std::getline().
+    pattern: gets(...)
+
+  - id: pingstats-shell-out
+    languages: [c, cpp]
+    severity: ERROR
+    message: >-
+      system() runs a command through the shell, and pingstats reads its
+      target names out of a config file. It has no reason to shell out.
+    pattern: system(...)
